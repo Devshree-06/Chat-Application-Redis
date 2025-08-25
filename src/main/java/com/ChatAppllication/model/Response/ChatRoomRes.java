@@ -12,4 +12,9 @@ public class ChatRoomRes {
     private String status;
     private String roomId;
     private String message;
+
+    public ChatRoomRes(String status, String message) {
+        this.status = status;
+        this.message = message;
+    }
 }

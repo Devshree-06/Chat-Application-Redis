@@ -1,6 +1,12 @@
 package com.ChatAppllication.config;
 
+import com.ChatAppllication.model.ChatMessage;
 import com.ChatAppllication.model.ChatRoom;
+import com.ChatAppllication.redis.RedisSubscriber;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -9,40 +15,31 @@ import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.PatternTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
-import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
-import org.springframework.data.redis.serializer.Jackson2JsonRedisSerializer;
-import org.springframework.data.redis.serializer.RedisSerializationContext;
-import org.springframework.data.redis.serializer.StringRedisSerializer;
+import org.springframework.data.redis.serializer.*;
 
 
 @Configuration
+@Slf4j
 public class RedisConfig {
-    @Bean
-    public RedisConnectionFactory redisConnectionFactory() {
-        // Default localhost:6379
-        return new LettuceConnectionFactory();
-    }
+
 
     @Bean
-    public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory connectionFactory) {
-        RedisTemplate<String, Object> template = new RedisTemplate<>();
-        template.setConnectionFactory(connectionFactory);
-        template.setKeySerializer(new StringRedisSerializer());
-        template.setValueSerializer(new GenericJackson2JsonRedisSerializer());
-        template.setHashKeySerializer(new StringRedisSerializer());
-        template.setHashValueSerializer(new GenericJackson2JsonRedisSerializer());
-        return template;
-    }
-
-    @Bean
-    public RedisMessageListenerContainer redisContainer(RedisConnectionFactory connectionFactory) {
+    public RedisMessageListenerContainer redisContainer(RedisConnectionFactory connectionFactory,
+                                                        RedisSubscriber subscriber,
+                                                        ChannelTopic topic) {
         RedisMessageListenerContainer container = new RedisMessageListenerContainer();
         container.setConnectionFactory(connectionFactory);
+        container.addMessageListener(subscriber, new PatternTopic("chatroom*"));
+        log.info("RedisMessageListenerContainer initialized and subscriber registered for topic: " + topic.getTopic());
+
         return container;
     }
+
 
     @Bean
     public ChannelTopic topic() {
@@ -56,30 +53,73 @@ public class RedisConfig {
     }
 
     @Bean
-    public ReactiveRedisTemplate<String, Object> reactiveRedisTemplate(ReactiveRedisConnectionFactory factory) {
-        RedisSerializationContext<String, Object> serializationContext =
-                RedisSerializationContext.<String, Object>newSerializationContext(new GenericJackson2JsonRedisSerializer())
-                        .build();
-        return new ReactiveRedisTemplate<>(factory, serializationContext);
+    public ObjectMapper redisObjectMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule()); // Support Instant
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS); // ISO format
+        return mapper;
     }
 
     @Bean
-    public ReactiveRedisTemplate<String, ChatRoom> reactiveChatRoomTemplate( @Qualifier("reactiveRedisConnectionFactory") ReactiveRedisConnectionFactory factory) {
+    public ReactiveStringRedisTemplate reactiveStringRedisTemplate(ReactiveRedisConnectionFactory factory) {
+        return new ReactiveStringRedisTemplate(factory);
+    }
 
-        Jackson2JsonRedisSerializer<ChatRoom> chatRoomSerializer = new Jackson2JsonRedisSerializer<>(ChatRoom.class);
 
-        RedisSerializationContext.SerializationPair<ChatRoom> valueSerializationPair =
-                RedisSerializationContext.SerializationPair.fromSerializer(chatRoomSerializer);
+    @Bean
+    public ReactiveRedisTemplate<String, Object> reactiveRedisTemplate(ReactiveRedisConnectionFactory factory, ObjectMapper mapper) {
+        GenericJackson2JsonRedisSerializer serializer = new GenericJackson2JsonRedisSerializer(mapper);
 
-        RedisSerializationContext<String, ChatRoom> serializationContext =
+        RedisSerializationContext<String, Object> context = RedisSerializationContext
+                .<String, Object>newSerializationContext(new StringRedisSerializer())
+                .key(new StringRedisSerializer())
+                .value(serializer)
+                .hashKey(new StringRedisSerializer())
+                .hashValue(serializer)
+                .build();
+
+        return new ReactiveRedisTemplate<>(factory, context);
+    }
+
+    @Bean
+    public ReactiveRedisTemplate<String, ChatRoom> reactiveChatRoomTemplate(
+            ReactiveRedisConnectionFactory factory, ObjectMapper mapper) {
+
+        Jackson2JsonRedisSerializer<ChatRoom> serializer = new Jackson2JsonRedisSerializer<>(ChatRoom.class);
+        serializer.setObjectMapper(mapper); // enables Instant serialization
+
+        RedisSerializationContext.SerializationPair<ChatRoom> valuePair =
+                RedisSerializationContext.SerializationPair.fromSerializer(serializer);
+
+        RedisSerializationContext<String, ChatRoom> context =
                 RedisSerializationContext.<String, ChatRoom>newSerializationContext(new StringRedisSerializer())
-                        .key(new StringRedisSerializer())
-                        .hashKey(new StringRedisSerializer())
-                        .hashValue(RedisSerializationContext.SerializationPair.fromSerializer(new GenericJackson2JsonRedisSerializer()))
-                        .value(valueSerializationPair)
+                        .key(RedisSerializationContext.SerializationPair.fromSerializer(new StringRedisSerializer()))
+                        .value(valuePair)
+                        .hashKey(RedisSerializationContext.SerializationPair.fromSerializer(new StringRedisSerializer()))
+                        .hashValue(RedisSerializationContext.SerializationPair.fromSerializer(serializer))
                         .build();
 
-        return new ReactiveRedisTemplate<>(factory, serializationContext);
+        return new ReactiveRedisTemplate<>(factory, context);
     }
+
+
+    @Bean
+    public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory connectionFactory, ObjectMapper mapper) {
+        RedisTemplate<String, Object> template = new RedisTemplate<>();
+        template.setConnectionFactory(connectionFactory);
+
+        // Key serializers
+        template.setKeySerializer(new StringRedisSerializer());
+        template.setHashKeySerializer(new StringRedisSerializer());
+
+        // Value serializer using custom ObjectMapper
+        GenericJackson2JsonRedisSerializer serializer = new GenericJackson2JsonRedisSerializer(mapper);
+        template.setValueSerializer(serializer);
+        template.setHashValueSerializer(serializer);
+
+        template.afterPropertiesSet();
+        return template;
+    }
+
 
 }
