@@ -13,6 +13,7 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.Jackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
@@ -64,9 +65,20 @@ public class RedisConfig {
 
     @Bean
     public ReactiveRedisTemplate<String, ChatRoom> reactiveChatRoomTemplate( @Qualifier("reactiveRedisConnectionFactory") ReactiveRedisConnectionFactory factory) {
+
+        Jackson2JsonRedisSerializer<ChatRoom> chatRoomSerializer = new Jackson2JsonRedisSerializer<>(ChatRoom.class);
+
+        RedisSerializationContext.SerializationPair<ChatRoom> valueSerializationPair =
+                RedisSerializationContext.SerializationPair.fromSerializer(chatRoomSerializer);
+
         RedisSerializationContext<String, ChatRoom> serializationContext =
-                RedisSerializationContext.<String, ChatRoom>newSerializationContext(new GenericJackson2JsonRedisSerializer())
+                RedisSerializationContext.<String, ChatRoom>newSerializationContext(new StringRedisSerializer())
+                        .key(new StringRedisSerializer())
+                        .hashKey(new StringRedisSerializer())
+                        .hashValue(RedisSerializationContext.SerializationPair.fromSerializer(new GenericJackson2JsonRedisSerializer()))
+                        .value(valueSerializationPair)
                         .build();
+
         return new ReactiveRedisTemplate<>(factory, serializationContext);
     }
 
