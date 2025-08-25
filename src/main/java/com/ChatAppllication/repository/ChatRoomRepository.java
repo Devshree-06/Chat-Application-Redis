@@ -6,6 +6,8 @@ import org.springframework.data.redis.core.ReactiveValueOperations;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Mono;
 
+import java.util.HashSet;
+
 @Repository
 public class ChatRoomRepository {
 
@@ -18,7 +20,8 @@ public class ChatRoomRepository {
     }
 
     public Mono<ChatRoom> saveChatRoom(ChatRoom room){
-        return valueOps.set("chatroom:" + room.getId(),room)
+        String roomId = room.getId().replace("\"", "");
+        return valueOps.set("chatroom:" + roomId,room)
                 .thenReturn(room)
                 .onErrorMap(ex -> new RuntimeException("Redis save failed: " + ex.getMessage()));
     }
@@ -34,4 +37,5 @@ public class ChatRoomRepository {
                 .onErrorMap(ex -> new RuntimeException("Redis delete failed: " + ex.getMessage()));
 
     }
+
 }
